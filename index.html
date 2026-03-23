@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D 数字华容道 (智能版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; touch-action: none; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+        
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: flex; flex-direction: column;
+            justify-content: space-between; padding: 20px; box-sizing: border-box;
+        }
+
+        .hud-panel {
+            pointer-events: auto;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 12px;
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .stat-label { font-size: 10px; text-transform: uppercase; color: #9ca3af; letter-spacing: 0.5px; margin-bottom: 2px; }
+        .stat-value { font-family: 'Courier New', monospace; font-weight: bold; font-size: 1.25rem; }
+
+        .btn {
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            border: none; padding: 10px 20px; color: white; border-radius: 8px;
+            font-weight: bold; cursor: pointer; transition: all 0.2s;
+            margin: 0 4px; font-size: 14px; text-transform: uppercase;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .btn:active { transform: scale(0.95); }
+        .btn-secondary { background: linear-gradient(135deg, #4b5563, #374151); }
+
+        #win-modal {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: flex;
+            align-items: center; justify-content: center;
+            opacity: 0; pointer-events: none; transition: opacity 0.5s; z-index: 10;
+        }
+        #win-modal.active { opacity: 1; pointer-events: auto; }
+        
+        .win-content {
+            background: #1e1e2e; padding: 40px; border-radius: 20px;
+            text-align: center; color: white; border: 1px solid #4f46e5;
+            box-shadow: 0 0 50px rgba(79, 70, 229, 0.4);
+            transform: scale(0.8); transition: transform 0.3s;
+        }
+        #win-modal.active .win-content { transform: scale(1); }
+
+        /* Grid Layout for Top Bar */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+
+        #loader {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #111; z-index: 20; display: flex;
+            justify-content: center; align-items: center; color: #4f46e5;
+            font-size: 24px; font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loader">加载 3D 引擎中...</div>
+    <div id="canvas-container"></div>
+
+    <div id="ui-layer">
+        <!-- Top Stats Bar -->
+        <div class="pointer-events-none w-full flex flex-col items-center">
+            <h1 class="text-xl font-bold text-white mb-2 drop-shadow-md" style="text-shadow: 0 2px 4px rgba(0,0,0,0.8);">3D 华容道</h1>
+            
+            <div class="stats-grid pointer-events-auto">
+                <div class="hud-panel">
+                    <span class="stat-label">当前步数</span>
+                    <span id="moves" class="stat-value text-white">0</span>
+                </div>
+                
+                <div class="hud-panel border-blue-500 border-opacity-30 bg-blue-900 bg-opacity-40">
+                    <span class="stat-label text-blue-300">理论最少</span>
+                    <span id="min-moves" class="stat-value text-blue-300">0</span>
+                </div>
+
+                <div class="hud-panel">
+                    <span class="stat-label">时间</span>
+                    <span id="timer" class="stat-value text-yellow-400">00:00</span>
+                </div>
+            </div>
+            <div class="text-xs text-gray-400 mt-2 bg-black bg-opacity-50 px-2 py-1 rounded">
+                越接近“理论最少”说明实力越强
+            </div>
+        </div>
+
+        <!-- Bottom Controls -->
+        <div class="w-full flex justify-center pb-8 pointer-events-none">
+            <div class="hud-panel flex-row gap-2 pointer-events-auto" style="min-width: auto;">
+                <select id="difficulty-select" class="bg-gray-700 text-white rounded px-3 py-2 text-sm outline-none border border-gray-600 font-bold cursor-pointer hover:bg-gray-600">
+                    <option value="3">简单 (3x3)</option>
+                    <option value="4" selected>经典 (4x4)</option>
+                    <option value="5">困难 (5x5)</option>
+                </select>
+                <button id="btn-shuffle" class="btn">开始挑战</button>
+                <button id="btn-camera" class="btn btn-secondary">📷</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Win Modal -->
+    <div id="win-modal">
+        <div class="win-content">
+            <div class="text-6xl mb-4">🏆</div>
+            <h2 class="text-3xl font-bold mb-2 text-white">挑战成功!</h2>
+            <div class="grid grid-cols-2 gap-4 text-left bg-gray-800 p-4 rounded-lg mb-6 mt-4">
+                <div>
+                    <p class="text-xs text-gray-400">你的步数</p>
+                    <p id="win-moves" class="text-xl font-bold text-white">0</p>
+                </div>
+                <div>
+                    <p class="text-xs text-gray-400">耗时</p>
+                    <p id="win-time" class="text-xl font-bold text-yellow-400">00:00</p>
+                </div>
+                <div class="col-span-2 border-t border-gray-700 pt-2">
+                    <p class="text-xs text-gray-400">评级</p>
+                    <p id="win-rating" class="text-lg font-bold text-blue-400">S 级 - 大师风范</p>
+                </div>
+            </div>
+            <button id="btn-replay" class="btn w-full py-3 text-lg">再玩一次</button>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * 3D Number Klotski with Manhattan Heuristic
+         */
+
+        const CONFIG = {
+            tileSize: 2.0, tileGap: 0.1, tileHeight: 0.5,
+            animSpeed: 0.15,
+            colors: { tile: 0x3b82f6, bg: 0x111827 }
+        };
+
+        let state = {
+            gridSize: 4,
+            tiles: [], 
+            emptyPos: { x: 3, y: 3 },
+            isAnimating: false,
+            moves: 0,
+            initialDistance: 0, // Store starting difficulty
+            startTime: null,
+            timerInterval: null,
+            isPlaying: false,
+            solved: false
+        };
+
+        let scene, camera, renderer, raycaster, mouse, boardGroup;
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // --- Audio System ---
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+
+            if (type === 'slide') {
+                osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                osc.start(now); osc.stop(now + 0.1);
+            } else if (type === 'win') {
+                osc.type = 'triangle';
+                // Simple arpeggio
+                [0, 0.1, 0.2, 0.3].forEach((delay, i) => {
+                    const o = audioCtx.createOscillator();
+                    const g = audioCtx.createGain();
+                    o.connect(g);
+                    g.connect(audioCtx.destination);
+                    o.frequency.value = [523.25, 659.25, 783.99, 1046.50][i];
+                    g.gain.setValueAtTime(0.1, now + delay);
+                    g.gain.exponentialRampToValueAtTime(0.001, now + delay + 0.5);
+                    o.start(now + delay);
+                    o.stop(now + delay + 0.5);
+                });
+            }
+        }
+
+        // --- Heuristic Algorithm (Manhattan Distance + Linear Conflict) ---
+        // This calculates the "Lower Bound" of moves required
+        function calculateHeuristic() {
+            let manhattan = 0;
+            let linearConflict = 0;
+            const size = state.gridSize;
+
+            // 1. Manhattan Distance
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    const tile = state.tiles[y * size + x];
+                    if (tile) { // Skip empty space
+                        const val = tile.userData.value;
+                        // Target position for this value (0-indexed)
+                        const targetX = (val - 1) % size;
+                        const targetY = Math.floor((val - 1) / size);
+                        
+                        manhattan += Math.abs(x - targetX) + Math.abs(y - targetY);
+                    }
+                }
+            }
+
+            // 2. Linear Conflict (Rows)
+            for (let y = 0; y < size; y++) {
+                let rowTiles = [];
+                for (let x = 0; x < size; x++) {
+                    const tile = state.tiles[y * size + x];
+                    if (tile) {
+                        const val = tile.userData.value;
+                        const targetY = Math.floor((val - 1) / size);
+                        if (targetY === y) { // Tile is in its correct row
+                            rowTiles.push({ x: x, targetX: (val - 1) % size });
+                        }
+                    }
+                }
+                // Check conflicts in this row
+                for (let i = 0; i < rowTiles.length; i++) {
+                    for (let j = i + 1; j < rowTiles.length; j++) {
+                        // If tile I is to the right of tile J, but its target is to the left of J's target
+                        if (rowTiles[i].x < rowTiles[j].x && rowTiles[i].targetX > rowTiles[j].targetX) {
+                            linearConflict += 2;
+                        }
+                    }
+                }
+            }
+
+            // 3. Linear Conflict (Cols)
+            for (let x = 0; x < size; x++) {
+                let colTiles = [];
+                for (let y = 0; y < size; y++) {
+                    const tile = state.tiles[y * size + x];
+                    if (tile) {
+                        const val = tile.userData.value;
+                        const targetX = (val - 1) % size;
+                        if (targetX === x) { // Tile is in its correct col
+                            colTiles.push({ y: y, targetY: Math.floor((val - 1) / size) });
+                        }
+                    }
+                }
+                for (let i = 0; i < colTiles.length; i++) {
+                    for (let j = i + 1; j < colTiles.length; j++) {
+                        if (colTiles[i].y < colTiles[j].y && colTiles[i].targetY > colTiles[j].targetY) {
+                            linearConflict += 2;
+                        }
+                    }
+                }
+            }
+
+            return manhattan + linearConflict;
+        }
+
+        // --- Core Game Setup ---
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(CONFIG.colors.bg);
+            scene.fog = new THREE.Fog(CONFIG.colors.bg, 10, 60);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // Lights
+            const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambient);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            scene.add(dirLight);
+            const spotLight = new THREE.SpotLight(0x6366f1, 1.5);
+            spotLight.position.set(-15, 15, -5);
+            spotLight.lookAt(0,0,0);
+            scene.add(spotLight);
+
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+            boardGroup = new THREE.Group();
+            scene.add(boardGroup);
+
+            window.addEventListener('resize', onWindowResize, false);
+            renderer.domElement.addEventListener('mousedown', onPointerDown);
+            renderer.domElement.addEventListener('touchstart', (e) => onPointerDown(e.touches[0]), { passive: false });
+
+            document.getElementById('loader').style.display = 'none';
+            animate();
+            resetGame(false);
+        }
+
+        function createNumberTexture(number) {
+            const size = 512;
+            const canvas = document.createElement('canvas');
+            canvas.width = size; canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            
+            // Gradient bg
+            const grd = ctx.createLinearGradient(0,0,size,size);
+            grd.addColorStop(0, '#3b82f6');
+            grd.addColorStop(1, '#2563eb');
+            ctx.fillStyle = grd;
+            ctx.fillRect(0,0,size,size);
+            
+            // Inner border
+            ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+            ctx.lineWidth = 20;
+            ctx.strokeRect(10,10,size-20,size-20);
+
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = 'bold 220px "Segoe UI"';
+            ctx.shadowColor = "rgba(0,0,0,0.4)";
+            ctx.shadowBlur = 15;
+            ctx.shadowOffsetY = 10;
+            ctx.fillText(number, size/2, size/2);
+            
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createBoard() {
+            while(boardGroup.children.length) {
+                const o = boardGroup.children[0];
+                if(o.geometry) o.geometry.dispose();
+                boardGroup.remove(o);
+            }
+
+            state.tiles = new Array(state.gridSize * state.gridSize).fill(null);
+            const totalW = state.gridSize * (CONFIG.tileSize + CONFIG.tileGap);
+            const offset = (totalW - CONFIG.tileSize - CONFIG.tileGap) / 2;
+
+            const geo = new THREE.BoxGeometry(CONFIG.tileSize, CONFIG.tileHeight, CONFIG.tileSize);
+            const sideMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.5 });
+
+            for (let y = 0; y < state.gridSize; y++) {
+                for (let x = 0; x < state.gridSize; x++) {
+                    const idx = y * state.gridSize + x;
+                    if (idx === state.gridSize * state.gridSize - 1) {
+                        state.emptyPos = {x, y};
+                        continue;
+                    }
+                    const val = idx + 1;
+                    const tex = createNumberTexture(val);
+                    const topMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.3 });
+                    
+                    const mesh = new THREE.Mesh(geo, [sideMat, sideMat, topMat, sideMat, sideMat, sideMat]);
+                    
+                    const wx = x * (CONFIG.tileSize + CONFIG.tileGap) - offset;
+                    const wz = y * (CONFIG.tileSize + CONFIG.tileGap) - offset;
+
+                    mesh.position.set(wx, 0, wz);
+                    mesh.userData = { 
+                        logicX: x, logicY: y, value: val, isTile: true, 
+                        targetPos: new THREE.Vector3(wx, 0, wz) 
+                    };
+                    mesh.castShadow = true; mesh.receiveShadow = true;
+                    
+                    boardGroup.add(mesh);
+                    state.tiles[idx] = mesh;
+                }
+            }
+            
+            // Base
+            const base = new THREE.Mesh(
+                new THREE.BoxGeometry(totalW+0.5, 0.2, totalW+0.5),
+                new THREE.MeshStandardMaterial({ color: 0x374151 })
+            );
+            base.position.y = -0.4;
+            base.receiveShadow = true;
+            boardGroup.add(base);
+        }
+
+        function updateCamera() {
+            const dist = state.gridSize * 3.5 + 4;
+            camera.position.set(0, dist, dist * 0.5);
+            camera.lookAt(0, -1, 0);
+        }
+
+        function isValidMove(tile) {
+            const dx = Math.abs(tile.userData.logicX - state.emptyPos.x);
+            const dy = Math.abs(tile.userData.logicY - state.emptyPos.y);
+            return dx + dy === 1;
+        }
+
+        function moveTile(tile, instant = false) {
+            const ox = tile.userData.logicX, oy = tile.userData.logicY;
+            const nx = state.emptyPos.x, ny = state.emptyPos.y;
+
+            state.tiles[ny * state.gridSize + nx] = tile;
+            state.tiles[oy * state.gridSize + ox] = null;
+            tile.userData.logicX = nx;
+            tile.userData.logicY = ny;
+            state.emptyPos = {x: ox, y: oy};
+
+            const totalW = state.gridSize * (CONFIG.tileSize + CONFIG.tileGap);
+            const offset = (totalW - CONFIG.tileSize - CONFIG.tileGap) / 2;
+            const wx = nx * (CONFIG.tileSize + CONFIG.tileGap) - offset;
+            const wz = ny * (CONFIG.tileSize + CONFIG.tileGap) - offset;
+            
+            tile.userData.targetPos.set(wx, 0, wz);
+            
+            if (instant) {
+                tile.position.copy(tile.userData.targetPos);
+            } else {
+                playSound('slide');
+                state.moves++;
+                updateUI(); // Update heuristic immediately after move
+                checkWin();
+            }
+        }
+
+        function shuffleBoard() {
+            const moves = state.gridSize * state.gridSize * 20;
+            let lastTile = null;
+            for(let i=0; i<moves; i++) {
+                const ex = state.emptyPos.x, ey = state.emptyPos.y;
+                const neighbors = [];
+                [{x:ex-1, y:ey}, {x:ex+1, y:ey}, {x:ex, y:ey-1}, {x:ex, y:ey+1}].forEach(p => {
+                    if(p.x>=0 && p.x<state.gridSize && p.y>=0 && p.y<state.gridSize) {
+                        const t = state.tiles[p.y * state.gridSize + p.x];
+                        if(t && t !== lastTile) neighbors.push(t);
+                    }
+                });
+                if(neighbors.length) {
+                    const t = neighbors[Math.floor(Math.random()*neighbors.length)];
+                    moveTile(t, true);
+                    lastTile = t;
+                }
+            }
+        }
+
+        function checkWin() {
+            if (!state.isPlaying) return;
+            let correct = 0;
+            const total = state.gridSize * state.gridSize;
+            for(let i=0; i<total; i++) {
+                const t = state.tiles[i];
+                if(t && t.userData.value === i + 1) correct++;
+            }
+            if(correct === total - 1) {
+                gameWin();
+            }
+        }
+
+        function gameWin() {
+            state.isPlaying = false;
+            state.solved = true;
+            clearInterval(state.timerInterval);
+            playSound('win');
+
+            // Rating Calculation
+            const efficiency = state.initialDistance > 0 ? (state.initialDistance / state.moves) : 0;
+            let rating = "B 级 - 还需努力";
+            if (efficiency > 0.8) rating = "S 级 - 大师风范";
+            else if (efficiency > 0.6) rating = "A 级 - 思路清晰";
+            else if (efficiency > 0.4) rating = "C 级 - 多加练习";
+
+            document.getElementById('win-time').innerText = document.getElementById('timer').innerText;
+            document.getElementById('win-moves').innerText = state.moves;
+            document.getElementById('win-rating').innerText = rating;
+            document.getElementById('win-modal').classList.add('active');
+        }
+
+        function onPointerDown(e) {
+            if (!state.isPlaying || state.solved) return;
+            mouse.x = ((e.clientX || e.touches[0].clientX) / window.innerWidth) * 2 - 1;
+            mouse.y = -((e.clientY || e.touches[0].clientY) / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const hits = raycaster.intersectObjects(boardGroup.children);
+            if(hits.length) {
+                const t = hits.find(h => h.object.userData.isTile);
+                if(t && isValidMove(t.object)) moveTile(t.object);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            boardGroup.children.forEach(c => {
+                if(c.userData.isTile) {
+                    c.position.lerp(c.userData.targetPos, CONFIG.animSpeed);
+                }
+            });
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // UI Logic
+        function resetGame(shuffle = true) {
+            state.gridSize = parseInt(document.getElementById('difficulty-select').value);
+            updateCamera();
+            createBoard();
+            
+            state.moves = 0;
+            state.isPlaying = false;
+            state.solved = false;
+            clearInterval(state.timerInterval);
+            document.getElementById('win-modal').classList.remove('active');
+
+            if (shuffle) {
+                shuffleBoard();
+                state.isPlaying = true;
+                state.startTime = Date.now();
+                state.timerInterval = setInterval(() => {
+                    const d = Math.floor((Date.now()-state.startTime)/1000);
+                    const m = Math.floor(d/60).toString().padStart(2,'0');
+                    const s = (d%60).toString().padStart(2,'0');
+                    document.getElementById('timer').innerText = `${m}:${s}`;
+                }, 1000);
+                
+                // Calculate initial heuristic
+                state.initialDistance = calculateHeuristic();
+            } else {
+                state.initialDistance = 0;
+            }
+            updateUI();
+        }
+
+        function updateUI() {
+            document.getElementById('moves').innerText = state.moves;
+            document.getElementById('btn-shuffle').innerText = state.isPlaying ? "重新开始" : "开始挑战";
+            
+            // Update Heuristic Display
+            const h = calculateHeuristic();
+            const hEl = document.getElementById('min-moves');
+            hEl.innerText = h;
+            
+            // Color coding based on progress
+            if (h === 0 && state.moves > 0) hEl.style.color = '#4ade80'; // Green
+            else hEl.style.color = '#93c5fd'; // Blue
+        }
+
+        document.getElementById('btn-shuffle').addEventListener('click', () => resetGame(true));
+        document.getElementById('btn-replay').addEventListener('click', () => resetGame(true));
+        document.getElementById('btn-camera').addEventListener('click', updateCamera);
+        document.getElementById('difficulty-select').addEventListener('change', () => resetGame(false));
+
+        init();
+    </script>
+</body>
+</html>
+
